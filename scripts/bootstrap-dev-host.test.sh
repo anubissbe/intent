@@ -127,6 +127,7 @@ run_doctor() {
   local started finished
   started=$(now_ms)
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= \
     BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
   finished=$(now_ms)
   elapsed_ms=$((finished - started))
@@ -305,5 +306,71 @@ run_doctor
 expect_line "[missing]  jq: $bin_dir/jq is on PATH but jq --version fails"
 reject_line "[ok]       jq:"
 rm -f "$bin_dir/jq"
+
+# A caller cargo that does not run the pinned toolchain draws a warning naming
+# the binary and both versions, without counting as a gap.
+printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
+write_launcher cargo 'echo "cargo 1.98.0 (0123abcd 2026-01-01) (Homebrew)"'
+run_doctor
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
+expect_line "put rustup's proxy directory first on PATH"
+gaps_shadowed=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary alongside the shadowed-cargo warning"
+
+# A caller cargo honoring the pin is silent, and the warning above did not
+# change the failure count.
+write_launcher cargo 'echo "cargo 1.96.0 (0123abcd 2026-01-01)"'
+run_doctor
+reject_line "[warn]     cargo:"
+gaps_matching=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary with the matching cargo"
+[[ "$gaps_shadowed" == "$gaps_matching" ]] || fail "shadowed-cargo warning changed the gap count: '$gaps_shadowed' vs '$gaps_matching'"
+
+# Under make (MAKELEVEL set) the Makefile's rustup/cargo-bin PATH prepend is
+# stripped, so the warning reflects the caller's own shell resolution even
+# though the script itself sees the pinned toolchain first.
+toolchain_bin="$temp_dir/rustup-toolchain/bin"
+mkdir -p "$toolchain_bin"
+printf '#!/usr/bin/env bash\necho "cargo 1.96.0 (feedface 2026-01-01)"\n' >"$toolchain_bin/cargo"
+chmod +x "$toolchain_bin/cargo"
+write_launcher rustup "[ \"\$1\" = which ] && { echo $toolchain_bin/cargo; exit 0; }; exit 1"
+write_launcher cargo 'echo "cargo 1.98.0 (0123abcd 2026-01-01) (Homebrew)"'
+make_path="$toolchain_bin/:$temp_dir/home/.cargo/bin:$bin_dir"
+PATH="$make_path" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL=1 \
+  BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
+
+# Without MAKELEVEL the same PATH is the caller's own: the pinned toolchain
+# cargo is first, so the check is silent.
+PATH="$make_path" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= \
+  BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
+reject_line "[warn]     cargo:"
+
+# A caller-exported CARGO_BIN_DIR overrides the Makefile's default bin dir; the
+# strip must honor it, or the make-injected prefix survives and the check goes
+# silent on the pinned toolchain cargo instead of warning on the caller's.
+custom_cargo_bin="$temp_dir/custom-cargo-bin"
+mkdir -p "$custom_cargo_bin"
+PATH="$toolchain_bin/:$custom_cargo_bin:$bin_dir" HOME="$temp_dir/home" \
+  INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL=1 \
+  CARGO_BIN_DIR="$custom_cargo_bin" \
+  BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
+rm -f "$bin_dir/rustup" "$bin_dir/cargo"
+
+# A non-exact channel pin (named or partial) is not comparable to
+# `cargo --version` output: the check skips silently instead of warning
+# permanently on a pin-honoring rustup proxy.
+write_launcher cargo 'echo "cargo 1.98.0 (0123abcd 2026-01-01) (Homebrew)"'
+for channel in stable 1.96; do
+  printf '[toolchain]\nchannel = "%s"\ncomponents = ["rustfmt", "clippy"]\n' "$channel" >"$intentd_dir/rust-toolchain.toml"
+  run_doctor
+  reject_line "[warn]     cargo:"
+done
+printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
+run_doctor
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
+rm -f "$bin_dir/cargo"
 
 echo "bootstrap-dev-host tests passed"
