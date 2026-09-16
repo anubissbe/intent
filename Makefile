@@ -194,13 +194,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -219,7 +219,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
-	fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps check clean clean-dev \
+	fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -412,7 +412,15 @@ lint-event-types: ensure-intentd-submodule ## Lint event-type string literals ag
 lint-fixed-sleeps: ensure-intentd-submodule ## Lint unannotated fixed sleeps in tests against the ratcheting baseline (intent-core fixed_sleep_lint)
 	cd $(INTENTD_DIR) && cargo test -p intent-core --test fixed_sleep_lint --jobs $(BUILD_JOBS)
 
-check: fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps ## fmt + clippy + repo-slug fold lint + event-type lint + fixed-sleep lint
+# Source lint: fails naming file:line wherever a test file under
+# crates/*/tests names std::process::Child as a type instead of holding it in
+# intentd_test_support::GuardedChild (a bare Child leaks the process when the
+# test panics before teardown). Unmigrated files sit in a shrink-only BASELINE
+# inside the lint. Mirrors the intentd `check` CI job so local gates match CI.
+lint-raw-child: ensure-intentd-submodule ## Lint raw std::process::Child types in e2e test code (intentd-test-support raw_child_lint)
+	cd $(INTENTD_DIR) && cargo test -p intentd-test-support --test raw_child_lint --jobs $(BUILD_JOBS)
+
+check: fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child ## fmt + clippy + repo-slug fold lint + event-type lint + fixed-sleep lint + raw-Child lint
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
