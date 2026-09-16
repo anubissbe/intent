@@ -20,6 +20,8 @@ const SHELL_PREFIX_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while',
 const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
+const TOML_AUTOTESTS = /^autotests\s*=\s*(true|false)\b/;
+const GLOB_METACHARACTERS = /[*?[]/;
 
 export class CheckError extends Error {
   constructor(message, exitCode = 2) {
@@ -188,10 +190,13 @@ export function extractCargoReferences(words) {
   if (!CARGO_SUBCOMMANDS.has(subcommand)) return null;
   const packages = [];
   const tests = [];
+  let workspace = false;
   for (let i = cargoIndex + 1; i < command.length; i += 1) {
     const word = command[i];
     if (word === '--') break;
-    if (word === '-p' || word === '--package') {
+    if (word === '--workspace' || word === '--all') {
+      workspace = true;
+    } else if (word === '-p' || word === '--package') {
       if (command[i + 1] !== undefined) packages.push(command[(i += 1)]);
     } else if (word.startsWith('--package=')) {
       packages.push(word.slice('--package='.length));
@@ -201,7 +206,7 @@ export function extractCargoReferences(words) {
       tests.push(word.slice('--test='.length));
     }
   }
-  return { subcommand, packages, tests };
+  return { subcommand, packages, tests, ...(workspace ? { workspace } : {}) };
 }
 
 export function parseMakefile(text) {
@@ -251,6 +256,17 @@ export function parseTestTargetNames(cargoToml) {
     .filter((section) => section.name === 'test' && section.array)
     .map(sectionName)
     .filter((name) => name !== undefined);
+}
+
+// `[package] autotests = false` turns off cargo's tests/ auto-discovery; only
+// declared [[test]] targets remain. Defaults to true, as in cargo.
+export function parsePackageAutotests(cargoToml) {
+  const section = tomlSections(cargoToml).find((candidate) => candidate.name === 'package' && !candidate.array);
+  for (const line of section?.lines ?? []) {
+    const match = TOML_AUTOTESTS.exec(line);
+    if (match) return match[1] === 'true';
+  }
+  return true;
 }
 
 function git(args, { cwd } = {}) {
@@ -329,11 +345,78 @@ export function hasTestTarget(reader, crate, name) {
   return testTargetCandidates(crate.dir, name).some((candidate) => reader.exists(candidate));
 }
 
+// Every test target cargo auto-discovers for a crate (tests/<name>.rs and
+// tests/<name>/main.rs, unless the package sets autotests = false) plus the
+// [[test]] names declared in its manifest.
+export function listTestTargets(reader, crate) {
+  const names = new Set(parseTestTargetNames(crate.cargoToml));
+  if (!parsePackageAutotests(crate.cargoToml)) return [...names];
+  for (const entry of reader.listTree(`${crate.dir}/tests`)) {
+    const base = path.posix.basename(entry.path);
+    if (entry.type === 'blob' && base.endsWith('.rs')) names.add(base.slice(0, -'.rs'.length));
+    else if (entry.type === 'tree' && reader.exists(`${entry.path}/main.rs`)) names.add(base);
+  }
+  return [...names];
+}
+
+// A --test value containing cargo glob metacharacters is a pattern that cargo
+// matches against the target names of every selected package.
+export function isTestGlob(name) {
+  return GLOB_METACHARACTERS.test(name);
+}
+
+// Mirrors the parse rules of the `glob` crate cargo builds --test patterns
+// with (`cannot build glob pattern from ...`): `**` must be a whole path
+// component, `***` is invalid, `[` needs a non-empty class closed by `]`, and
+// negation is spelled `[!...]` (`^` is an ordinary class member). Returns
+// { matcher } for a valid pattern, { error } otherwise.
+export function compileTestGlob(pattern) {
+  const chars = [...pattern];
+  let source = '';
+  let i = 0;
+  while (i < chars.length) {
+    const char = chars[i];
+    if (char === '*') {
+      const start = i;
+      while (i < chars.length && chars[i] === '*') i += 1;
+      const count = i - start;
+      if (count > 2) return { error: 'wildcards are either regular `*` or recursive `**`' };
+      if (count === 2) {
+        const startsComponent = start === 0 || chars[start - 1] === '/';
+        const endsComponent = i === chars.length || chars[i] === '/';
+        if (!startsComponent || !endsComponent) return { error: 'recursive wildcards must form a single path component' };
+      }
+      source += '.*';
+    } else if (char === '?') {
+      source += '.';
+      i += 1;
+    } else if (char === '[') {
+      const negated = chars[i + 1] === '!';
+      const bodyStart = i + (negated ? 2 : 1);
+      const close = chars.indexOf(']', bodyStart + 1);
+      if (close === -1) return { error: 'invalid range pattern' };
+      const body = chars.slice(bodyStart, close).join('').replace(/[\\\]^]/g, '\\$&');
+      source += `[${negated ? '^' : ''}${body}]`;
+      i = close + 1;
+    } else {
+      source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      i += 1;
+    }
+  }
+  return { matcher: new RegExp(`^${source}$`) };
+}
+
+export function globToRegExp(pattern) {
+  const { matcher, error } = compileTestGlob(pattern);
+  if (error) throw new CheckError(`cannot build glob pattern from '${pattern}': ${error}`);
+  return matcher;
+}
+
 export function verifyInvocations(invocations, crates, reader, { makefile = 'Makefile' } = {}) {
   const sha7 = reader.sha.slice(0, 7);
   const failures = [];
   let checked = 0;
-  for (const { line, packages, tests } of invocations) {
+  for (const { line, packages, tests, workspace = false } of invocations) {
     const resolved = [];
     for (const name of packages) {
       checked += 1;
@@ -347,7 +430,29 @@ export function verifyInvocations(invocations, crates, reader, { makefile = 'Mak
     }
     for (const test of tests) {
       checked += 1;
-      if (packages.length === 0) {
+      if (isTestGlob(test)) {
+        // A glob selects across the workspace (or the named crates) and only
+        // needs one matching target somewhere.
+        if (!workspace && packages.length === 0) {
+          failures.push(
+            `${makefile}:${line}: error: cargo test pattern '${test}' cannot be verified: the cargo invocation names no -p/--package crate and passes no --workspace`,
+          );
+          continue;
+        }
+        const { matcher, error } = compileTestGlob(test);
+        if (error) {
+          failures.push(`${makefile}:${line}: error: cargo cannot build glob pattern from '${test}': ${error}`);
+          continue;
+        }
+        const selected = workspace ? [...crates.values()] : resolved;
+        if (selected.some((crate) => listTestTargets(reader, crate).some((name) => matcher.test(name)))) continue;
+        const scope = workspace
+          ? 'any workspace crate'
+          : `crate${selected.length === 1 ? '' : 's'} ${selected.map((crate) => `'${crate.name}'`).join(', ')}`;
+        failures.push(
+          `${makefile}:${line}: error: cargo test pattern '${test}' matches no test target in ${scope} at pinned intentd gitlink ${sha7}`,
+        );
+      } else if (packages.length === 0) {
         failures.push(
           `${makefile}:${line}: error: cargo test target '${test}' cannot be verified: the cargo invocation names no -p/--package crate`,
         );
