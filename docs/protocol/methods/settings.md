@@ -9,7 +9,7 @@
 | settings.list | — | { settings: SettingDefinitionWithValue[], revision: number } (sensitive values redacted; TOML-backed entries carry `origin`) |
 | settings.get | path (req) | { path, value, definition, origin?, revision: number } — -32602 if path is unknown |
 | settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value, origin? }], revision: number }; triggers settings:changed |
-| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue) — -32602 if path is unknown |
+| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue, except for absent-means-auto keys — see below — where it removes the key and returns `value: null`) — -32602 if path is unknown |
 
 `SettingDefinition`** shape:**
 
@@ -23,7 +23,7 @@ interface SettingDefinition {
   enumValues?: string[];  // present when type === "enum"
   min?: number;           // numeric bound (type === "number")
   max?: number;           // numeric bound (type === "number")
-  defaultValue?: unknown; // value used by settings.reset
+  defaultValue?: unknown; // value used by settings.reset (informational only for absent-means-auto keys, see below)
   sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
   tokenImpact?: string;   // approximate prompt-token cost of the gated feature, e.g. "~620 tokens/session"; presence-detected (absent when unannotated)
 }
@@ -100,6 +100,16 @@ re-parse, debounced; invalid content keeps last-good values) and emit the same
 `settings:changed` notification. A key pinned by a startup flag is **read-only over the wire**
 while pinned: `settings.update` / `settings.reset` on it yields `-32602` with a message naming
 the overriding flag ("overridden by startup flag …").
+
+**`defaultValue` for absent-means-auto keys.** For a TOML-backed key whose absence is the
+default and resolves to a host-derived value — today `agents.memoryBudgetMb`, where the
+absent key means auto `(RAM − 8 GB) / 2` (min 4 GB) — `defaultValue` **advertises the
+effective auto budget in MB** for this host so a client can render "Auto (N MB)" and tell
+auto apart from an explicit `0` (off). It is informational: `settings.reset` **removes the key**
+from config.toml and returns `value: null` with `origin: "default"`, and `settings.get` /
+`settings.list` keep reporting `value: null` for the absent key — the advertised number is
+never persisted or echoed back as the value. Writing that number explicitly via
+`settings.update` pins it as a `"file"` value that no longer tracks the host's RAM.
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
