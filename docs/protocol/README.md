@@ -72,7 +72,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.44 Guided Antigravity setup — `providers.setup.*` | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
 | §5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.46 Presence — `presence.*` / `note.presence.*` (ephemeral workspace roster + per-note viewer channel) | [methods/presence.md](./methods/presence.md) |
-| §5.47 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.redeem` / `workspace.members.*` (principals, invite links, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
+| §5.47 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.inspect` / `invite.accept` / `invite.challenge` / `invite.prove` / `workspace.members.*` (principals, invite links, the gist identity-proof join, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync: every method documented in a `methods/*.md` table must appear in the catalog, and every catalog entry must be dispatchable by intentd. A new method therefore needs both a `methods/*.md` table row and a catalog entry in the same change.
 

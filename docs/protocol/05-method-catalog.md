@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **379 dispatchable method names** across the following categories:
+The API exposes **384 dispatchable method names** across the following categories:
 
-- **Router methods:** 324 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 53 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 326 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 379 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 384 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 379 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 384 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.47) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`. The counts above include the unreleased 10.2 deltas over 10.1's 366 — +1 router (`presence.snapshot`), +2 fast-path (`presence.update`, `note.presence.update`) from [intent-hq/intentd#1887](https://github.com/intent-hq/intentd/pull/1887), and +1 router (`github.users.search`) from [intent-hq/intentd#1912](https://github.com/intent-hq/intentd/pull/1912) — not yet on `main` (see `versioning.md`).
 
-### Router methods by namespace (324 total)
+### Router methods by namespace (326 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file-tracking | 6 | getAgentLocks, getChanges, getLineStats, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 27 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search |
+| github | 29 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, identityProof.create, identityProof.delete, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 12 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update, testConnection |
@@ -65,13 +65,13 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (53 total)
+### Fast-path methods (56 total)
 
-The following 53 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 56 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.redeem, note.presence.update, pairing.getInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
 
-The two multiplayer fast paths (§5.47) are `workspace.invite.create` — served on every authenticated connection, fast-path because it wraps the minted invite into the `intent://invite` link with the listener's own pairing snapshot, which the router has no access to (like `pairing.getInfo`) — and `invite.redeem`, the **only** method served on the unauthenticated `/invite` endpoint (any other method there is `-32001`; on `/ws` and UDS it is not reachable).
+The five multiplayer fast paths (§5.47) are `workspace.invite.create` — served on every authenticated connection, fast-path because it wraps the minted invite into the `intent://invite` link with the listener's own pairing snapshot, which the router has no access to (like `pairing.getInfo`) — and the four guest join methods `invite.inspect`, `invite.accept`, `invite.challenge`, `invite.prove`, the **only** methods served on the unauthenticated `/invite` endpoint (any other method there is `-32001`; on `/ws` and UDS they are not reachable). The guest-side `github.identityProof.create` / `github.identityProof.delete` that publish the proof gist are ordinary router methods (§5.27).
 
 The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, `syncTabs`, `navigateTab`, `closeTab`; v9.10–v9.11) are fast-path because the host-only reports are keyed by the connection's `client.hello` identity — see §5.45. The four `providers.setup.*` methods (v9.8, [intent-hq/intentd#1742](https://github.com/intent-hq/intentd/pull/1742)) are the guided managed-provider (Antigravity) setup surface — per-connection setup operations whose sign-in step is delegated back to the owning app via the `providers.setup.openLogin` reverse RPC (below); their local-app-only contract is documented in [§5.44](./methods/models-providers.md#544-guided-antigravity-setup).
 
