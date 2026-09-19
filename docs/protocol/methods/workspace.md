@@ -167,7 +167,14 @@ must exist; an unresolved ref is warned before Apply and fails through the exist
 `workspace.create` structured error without fallback.
 
 The result is the existing `workspace-create` proposal resource with
-`preview.workspaceCreate.mode: "sibling"`. The title, prompt, specialist, and base ref
+`preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)): the proposal's
+pending-tracking identity — its `applyToolCallId`, falling back to `preview.title` — which
+is the key of the `pendingProposals` entry and of the `proposalResolutions` map (§5.5
+"Pending proposals" in [agents.md](./agents.md)). The caller should retain it: it is the
+stable handle `ws.workspace.applyProposal` accepts before AND after the proposal is
+resolved, whereas the idempotency key addresses the proposal only while it is pending. The
+title, prompt, specialist, and base ref
 remain editable; repository metadata is locked. The proposal stores one idempotency key,
 which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
 Dismiss has no create side effect. Delegated and background agents do not receive this
@@ -175,6 +182,74 @@ binding, and raw dispatch rejects it. Agents with a parent report the opportunit
 parentless background agents remain blocked and have no parent-report path. This is an MCP
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
+
+**Agent apply ([intent-hq/intent#5413](https://github.com/intent-hq/intent/issues/5413),
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)).** When the user tells the
+proposing agent in chat to approve one of its proposals, that agent can apply it itself
+with `ws.workspace.applyProposal(proposalIdOrIdempotencyKey, { userRequested: true,
+title?, initialPrompt? })`. The first argument is a non-empty string; the options object
+is required and `userRequested: true` (Boolean `true` only) is a mandatory attestation
+that the user explicitly asked in chat — absent or any other value is an error and nothing
+is created. `title` and `initialPrompt` are the ONLY overridable fields (each a non-empty
+trimmed string when present; `title` replaces `params.title`, `initialPrompt` replaces
+`params.initialAgent.prompt` and errors when the proposal carries no `initialAgent`);
+repository identity and path, `baseRef`, specialist and metadata are never overridable —
+any other option key is rejected naming the allowed set. **Proposing-agent-only lookup:**
+the argument is matched against the CALLER's own session — first a `pendingProposals`
+entry's `proposalId` verbatim, then the `payload.params.idempotencyKey` of a pending
+entry's proposal block (loaded by a bounded single-message seek of the carrying message,
+never a transcript hydration) — so another agent's proposal is never applicable, and the
+matched proposal must be `kind: "workspace-create"` with
+`payload.operation: "workspace.create"` (anything else is refused naming the kind). The
+proposal's stored idempotency key is reused verbatim, with or without overrides, so agent
+Apply, card Apply and card Retry converge on one workspace: the first successful create
+binds the key, and later retries reuse it and return the same workspace even if the
+resolution write previously failed and the card is still pending. The create runs through
+the same `workspace.create` deserialization as the
+router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
+the same `agent.resolveProposal` path the client-driven Apply uses, requesting
+`outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
+ws.workspace.applyProposal"` (suffixed ` with overridden title` / ` with overridden
+prompt` / ` with overridden title and prompt` when overrides were used) — so the
+`agent:updated` emit carrying `pendingProposals` + `proposalResolutions` and the
+`proposal_resolved` system notice fire identically to a card Apply (§5.5 "Pending
+proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
+promoted to the front of its queue), and on an ordinary successful resolution the card
+renders applied. Result:
+`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
+initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
+result's initial agent when present (agent-hidden fields stripped), `overrides` is
+`{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
+**`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never
+overwrites a persisted resolution — it echoes the existing one — so when the card was
+resolved from the UI while the create was in flight, that persisted outcome is kept and
+the result reports it as `outcome`. The warning is added only when the persisted outcome
+is not `applied`: a concurrent non-applied resolution (`dismissed`) yields
+`outcome: "dismissed"` with the created `workspace` retained in the result and a
+`resolveWarning` stating plainly that the workspace exists even though the card does not
+show applied (the agent should tell the user); a concurrent UI Apply yields
+`outcome: "applied"` with no warning, exactly like the ordinary case. `resolveWarning`
+also covers a failed resolution write: `outcome` is then `"applied"` (the requested
+value), the workspace exists, and the card may still show pending until the user
+dismisses it; nothing is retried. In the ordinary case (`outcome: "applied"`, write
+succeeded) `resolveWarning` is absent.
+**Idempotent / refused paths:** an id that is no longer pending but recorded `applied` in
+`proposalResolutions` returns `{ ok: true, proposalId, outcome: "applied",
+alreadyResolved: true }` without creating again; one recorded `dismissed` is an error
+(propose again with `proposeSibling` if still wanted); an id that is neither pending nor
+resolved is an error. **The idempotency key matches a proposal ONLY while it is pending**
+(`proposalResolutions` is keyed by `proposalId` alone, and a resolved proposal's carrying
+message is no longer tracked), so the caller should retain the `proposalId` returned by
+`proposeSibling` as the stable handle to address the proposal after it has been applied
+or dismissed — the miss error says so and points at it. A `workspace.create` failure
+surfaces the structured error and records NO resolution, so the card stays pending for
+Retry. **Turn-end caveat:** a proposal emitted in the CURRENT turn is recorded as pending
+only when the turn persists, so the agent can apply proposals from an earlier turn only —
+matching the intended flow (the user replies "approve" in a later message); the not-found
+error says so. Same availability as `proposeSibling`: foreground top-level agents only —
+delegated and background agents do not receive the binding and raw dispatch rejects it.
+Like `proposeSibling` this is an MCP binding over existing daemon paths, not a JSON-RPC
+method: `agent.resolveProposal` and the client-driven Apply flow are unchanged.
 
 **Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
 `tool_result` regardless of the script's return value. When the binding runs, the MCP
