@@ -222,7 +222,11 @@ export function renderIndex(bindings) {
   return out.join('\n');
 }
 
-/** `ws.*` mentions in a markdown text outside fenced code blocks: bare names plus inline-code call signatures. */
+/**
+ * `ws.*` mentions in a markdown text outside fenced code blocks: bare names plus inline-code call signatures.
+ * String literals inside inline-code spans are masked first, so a `ws.*`-looking string value in an example is
+ * data, not a mention; bare prose is scanned as written (an apostrophe there is not a literal opener).
+ */
 export function collectDocMentions(markdown) {
   const names = [];
   const signatures = [];
@@ -234,7 +238,8 @@ export function collectDocMentions(markdown) {
       return;
     }
     if (inFence) return;
-    for (const m of raw.matchAll(NAME_RE)) names.push({ name: m[0], line });
+    const scanned = raw.replace(CODE_SPAN_RE, (_, code) => `\`${maskLiterals(code)}\``);
+    for (const m of scanned.matchAll(NAME_RE)) names.push({ name: m[0], line });
     for (const span of raw.matchAll(CODE_SPAN_RE)) {
       const code = span[1];
       for (const m of maskLiterals(code).matchAll(new RegExp(`(?<![A-Za-z0-9_$])${NAME_SRC}\\(`, 'g'))) {

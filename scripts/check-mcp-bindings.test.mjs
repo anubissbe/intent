@@ -205,14 +205,18 @@ test('collectDocMentions keeps complete identifiers and is quote-aware inside in
     'Call `ws.agent.list2()` or ws.agent.list_all or `ws.agent.list$x`; not xws.agent.list.',
     '`ws.pr.snapshot(prNumber, { repo: "team/repo)", repoo: true })` and `ws.pr.snapshot(1, { repo: "team/repo(" })`.',
     '`ws.agent.send(id, "call ws.fake.inner(1)")`.',
+    "`ws.agent.send(id, 'see ws.fake.single')` then ws.fake.bare; don't stop.",
   ].join('\n');
   const { names, signatures } = collectDocMentions(doc);
   assert.deepEqual(names.filter((n) => n.line === 1).map((n) => n.name), ['ws.agent.list2', 'ws.agent.list_all', 'ws.agent.list$x']);
+  assert.deepEqual(names.filter((n) => n.line === 3).map((n) => n.name), ['ws.agent.send']);
+  assert.deepEqual(names.filter((n) => n.line === 4).map((n) => n.name), ['ws.agent.send', 'ws.fake.bare']);
   assert.deepEqual(signatures.map((s) => [s.name, s.args, s.line]), [
     ['ws.agent.list2', '', 1],
     ['ws.pr.snapshot', 'prNumber, { repo: "team/repo)", repoo: true }', 2],
     ['ws.pr.snapshot', '1, { repo: "team/repo(" }', 2],
     ['ws.agent.send', 'id, "call ws.fake.inner(1)"', 3],
+    ['ws.agent.send', "id, 'see ws.fake.single'", 4],
   ]);
 });
 
@@ -289,6 +293,15 @@ test('an unknown name that extends a known one is rejected in full, not truncate
   assert.deepEqual(messages(result), [
     `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.agent.list2 is not a binding in the pinned intentd help text (${TOOLS_RS_PATH}); if it was renamed, add it to RENAMED_BINDINGS in scripts/check-mcp-bindings.mjs`,
     `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.agent.list_all is not a binding in the pinned intentd help text (${TOOLS_RS_PATH}); if it was renamed, add it to RENAMED_BINDINGS in scripts/check-mcp-bindings.mjs`,
+  ]);
+});
+
+test('a ws.* name inside a string literal in an inline-code example is not a mention; the same name outside one still fails', async () => {
+  const doc = `${VALID_DOC}\n\`ws.agent.send(agentId, "see ws.example.foo")\` is fine.\nBut \`ws.example.foo\` is not.\n`;
+  const result = await runChecks(await withIndex({ 'methods/agents.md': doc }));
+  const line = doc.split('\n').length - 1;
+  assert.deepEqual(messages(result), [
+    `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.example.foo is not a binding in the pinned intentd help text (${TOOLS_RS_PATH}); if it was renamed, add it to RENAMED_BINDINGS in scripts/check-mcp-bindings.mjs`,
   ]);
 });
 
