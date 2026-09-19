@@ -204,7 +204,13 @@ matched proposal must be `kind: "workspace-create"` with
 proposal's stored idempotency key is reused verbatim, with or without overrides, so agent
 Apply, card Apply and card Retry converge on one workspace: the first successful create
 binds the key, and later retries reuse it and return the same workspace even if the
-resolution write previously failed and the card is still pending. The create runs through
+resolution write previously failed and the card is still pending. Same-key **concurrent**
+first-use callers (e.g. card Apply and agent Apply racing on one key) are serialized per
+`idempotencyKey` in the daemon's global create scope — `workspace.create` carries no
+`workspaceId`, so its idempotency record lives under the empty-workspace sentinel, not
+under the workspace it creates — so exactly one create runs and every caller receives the
+identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)). The create runs through
 the same `workspace.create` deserialization as the
 router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
 the same `agent.resolveProposal` path the client-driven Apply uses, requesting
@@ -727,7 +733,11 @@ server-minted id is `initialAgent.id`); when content is present the agent's turn
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result
 (carrying the originally minted `initialAgent.id`) without re-creating the
-session or re-delivering the prompt.
+session or re-delivering the prompt. Same-key **concurrent** first-use callers are
+serialized per `idempotencyKey` in the daemon's global create scope (the call has no
+`workspaceId`; the record lives under the empty-workspace sentinel), so exactly one create
+runs and every caller receives the identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)).
 The daemon stamps the reference-parity `isInitialAgent`/`isFirstWorkspaceAgent` flags on
 the created session's raw metadata JSON, and the strict `AgentLite.metadata` projection
 surfaces `isInitialAgent?: true` (presence-detected, `true`-only — §5.5) on the
