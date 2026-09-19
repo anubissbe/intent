@@ -167,7 +167,14 @@ must exist; an unresolved ref is warned before Apply and fails through the exist
 `workspace.create` structured error without fallback.
 
 The result is the existing `workspace-create` proposal resource with
-`preview.workspaceCreate.mode: "sibling"`. The title, prompt, specialist, and base ref
+`preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)): the proposal's
+pending-tracking identity — its `applyToolCallId`, falling back to `preview.title` — which
+is the key of the `pendingProposals` entry and of the `proposalResolutions` map (§5.5
+"Pending proposals" in [agents.md](./agents.md)). The caller should retain it: it is the
+stable handle `ws.workspace.applyProposal` accepts before AND after the proposal is
+resolved, whereas the idempotency key addresses the proposal only while it is pending. The
+title, prompt, specialist, and base ref
 remain editable; repository metadata is locked. The proposal stores one idempotency key,
 which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
 Dismiss has no create side effect. Delegated and background agents do not receive this
@@ -175,6 +182,80 @@ binding, and raw dispatch rejects it. Agents with a parent report the opportunit
 parentless background agents remain blocked and have no parent-report path. This is an MCP
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
+
+**Agent apply ([intent-hq/intent#5413](https://github.com/intent-hq/intent/issues/5413),
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)).** When the user tells the
+proposing agent in chat to approve one of its proposals, that agent can apply it itself
+with `ws.workspace.applyProposal(proposalIdOrIdempotencyKey, { userRequested: true,
+title?, initialPrompt? })`. The first argument is a non-empty string; the options object
+is required and `userRequested: true` (Boolean `true` only) is a mandatory attestation
+that the user explicitly asked in chat — absent or any other value is an error and nothing
+is created. `title` and `initialPrompt` are the ONLY overridable fields (each a non-empty
+trimmed string when present; `title` replaces `params.title`, `initialPrompt` replaces
+`params.initialAgent.prompt` and errors when the proposal carries no `initialAgent`);
+repository identity and path, `baseRef`, specialist and metadata are never overridable —
+any other option key is rejected naming the allowed set. **Proposing-agent-only lookup:**
+the argument is matched against the CALLER's own session — first a `pendingProposals`
+entry's `proposalId` verbatim, then the `payload.params.idempotencyKey` of a pending
+entry's proposal block (loaded by a bounded single-message seek of the carrying message,
+never a transcript hydration) — so another agent's proposal is never applicable, and the
+matched proposal must be `kind: "workspace-create"` with
+`payload.operation: "workspace.create"` (anything else is refused naming the kind). The
+proposal's stored idempotency key is reused verbatim, with or without overrides, so agent
+Apply, card Apply and card Retry converge on one workspace: the first successful create
+binds the key, and later retries reuse it and return the same workspace even if the
+resolution write previously failed and the card is still pending. Same-key **concurrent**
+first-use callers (e.g. card Apply and agent Apply racing on one key) are serialized per
+`idempotencyKey` in the daemon's global create scope — `workspace.create` carries no
+`workspaceId`, so its idempotency record lives under the empty-workspace sentinel, not
+under the workspace it creates — so exactly one create runs and every caller receives the
+identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)). The create runs through
+the same `workspace.create` deserialization as the
+router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
+the same `agent.resolveProposal` path the client-driven Apply uses, requesting
+`outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
+ws.workspace.applyProposal"` (suffixed ` with overridden title` / ` with overridden
+prompt` / ` with overridden title and prompt` when overrides were used) — so the
+`agent:updated` emit carrying `pendingProposals` + `proposalResolutions` and the
+`proposal_resolved` system notice fire identically to a card Apply (§5.5 "Pending
+proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
+promoted to the front of its queue), and on an ordinary successful resolution the card
+renders applied. Result:
+`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
+initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
+result's initial agent when present (agent-hidden fields stripped), `overrides` is
+`{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
+**`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never
+overwrites a persisted resolution — it echoes the existing one — so when the card was
+resolved from the UI while the create was in flight, that persisted outcome is kept and
+the result reports it as `outcome`. The warning is added only when the persisted outcome
+is not `applied`: a concurrent non-applied resolution (`dismissed`) yields
+`outcome: "dismissed"` with the created `workspace` retained in the result and a
+`resolveWarning` stating plainly that the workspace exists even though the card does not
+show applied (the agent should tell the user); a concurrent UI Apply yields
+`outcome: "applied"` with no warning, exactly like the ordinary case. `resolveWarning`
+also covers a failed resolution write: `outcome` is then `"applied"` (the requested
+value), the workspace exists, and the card may still show pending until the user
+dismisses it; nothing is retried. In the ordinary case (`outcome: "applied"`, write
+succeeded) `resolveWarning` is absent.
+**Idempotent / refused paths:** an id that is no longer pending but recorded `applied` in
+`proposalResolutions` returns `{ ok: true, proposalId, outcome: "applied",
+alreadyResolved: true }` without creating again; one recorded `dismissed` is an error
+(propose again with `proposeSibling` if still wanted); an id that is neither pending nor
+resolved is an error. **The idempotency key matches a proposal ONLY while it is pending**
+(`proposalResolutions` is keyed by `proposalId` alone, and a resolved proposal's carrying
+message is no longer tracked), so the caller should retain the `proposalId` returned by
+`proposeSibling` as the stable handle to address the proposal after it has been applied
+or dismissed — the miss error says so and points at it. A `workspace.create` failure
+surfaces the structured error and records NO resolution, so the card stays pending for
+Retry. **Turn-end caveat:** a proposal emitted in the CURRENT turn is recorded as pending
+only when the turn persists, so the agent can apply proposals from an earlier turn only —
+matching the intended flow (the user replies "approve" in a later message); the not-found
+error says so. Same availability as `proposeSibling`: foreground top-level agents only —
+delegated and background agents do not receive the binding and raw dispatch rejects it.
+Like `proposeSibling` this is an MCP binding over existing daemon paths, not a JSON-RPC
+method: `agent.resolveProposal` and the client-driven Apply flow are unchanged.
 
 **Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
 `tool_result` regardless of the script's return value. When the binding runs, the MCP
@@ -652,7 +733,11 @@ server-minted id is `initialAgent.id`); when content is present the agent's turn
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result
 (carrying the originally minted `initialAgent.id`) without re-creating the
-session or re-delivering the prompt.
+session or re-delivering the prompt. Same-key **concurrent** first-use callers are
+serialized per `idempotencyKey` in the daemon's global create scope (the call has no
+`workspaceId`; the record lives under the empty-workspace sentinel), so exactly one create
+runs and every caller receives the identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)).
 The daemon stamps the reference-parity `isInitialAgent`/`isFirstWorkspaceAgent` flags on
 the created session's raw metadata JSON, and the strict `AgentLite.metadata` projection
 surfaces `isInitialAgent?: true` (presence-detected, `true`-only — §5.5) on the
@@ -963,15 +1048,18 @@ each with a dedicated change event (§6.5) that carries the new value:
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
-`prStatus`, `activePullRequest`, `pullRequests`, `contextLinks`, `archivedAt`, `cowSupported`,
+`prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
+**List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
 **`contextLinks` (new in intentd, migration `0110`).** Issue/PR context links supplied
 at `workspace.create` — the initializer's context mentions — persisted on the workspace
-row and returned on every `Workspace` payload so any client opening the workspace can
-seed its layout from the linked pages. The param is `contextLinks?: ContextLink[]` where
+row and returned on the **detail** `Workspace` payloads (the `workspace.create` result and
+`workspace.get`) so a client opening the workspace can seed its layout from the linked
+pages; `workspace.list` / lite `workspace.subscribe` seq-0 rows omit it (see **List-row
+slimming** below). The param is `contextLinks?: ContextLink[]` where
 `ContextLink = { kind: "issue" | "pr", url: string, owner: string, repo: string,
 number: number }` (`kind` lowercase on the wire; an unknown `kind` — or a negative or
 fractional `number`, which fails the unsigned-integer field type — rejects `-32602` at
@@ -1201,13 +1289,17 @@ step 4, the git-root fold, which also canonicalizes the row's own `activePullReq
 `pullRequests` copies in place on every surface that derives `displayStatus`, `workspace.get`
 included) and the monitored PRs feed them through the monitor signals
 (intentd#1329), so the emitted `pullRequests` array and `displayStatus` agree on what the
-workspace's PRs are. Everything else is unchanged: the stored `workspace.pull_requests` column
-keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
-explicit-null clear below still targets only the stored value), `workspace.get` and the
-write-path responses carry the unmerged workspace-level list (no git-root or monitor entries
-are appended there — only the same-url canonicalization of the workspace's own copies
-applies), and the `pr:*` event
-payloads (§6.5) are untouched.
+workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
+monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
+`pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
+seq-0 rows and deltas) carry that pool capped at the **5** most recent
+(`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
+the recovery surface for the full pool (see the detail-only table below). Everything else is
+unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
+(PR discovery/refresh writes it as before, and the explicit-null clear below still targets
+only the stored value), the write-path responses carry the unmerged workspace-level list
+(no git-root or monitor entries are appended there — only the same-url canonicalization of
+the workspace's own copies applies), and the `pr:*` event payloads (§6.5) are untouched.
 
 **Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
 five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
@@ -1266,7 +1358,8 @@ omitted** (see its bullet below):
   filters archived before reading it; iOS decodes it optionally). Active list rows and
   `workspace.get` — archived included — keep serving it. The slimming runs as a final pass
   over the merged list after enrichment, so a row degraded by an enrichment failure is
-  slimmed the same way.
+  slimmed the same way (see **List-row slimming** below for the full set of list-only
+  omissions).
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
   **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
   `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
@@ -1274,6 +1367,53 @@ omitted** (see its bullet below):
   stays on the wire shape as optional for decoder compatibility; clients that need diff data fetch
   it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
   workspace payload.
+
+**List-row slimming (`workspace.list` / lite `workspace.subscribe` seq-0; extends
+[monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)).** Both list surfaces
+serve each `Workspace` through one final `Workspace::slim_for_list` pass — after the
+aggregate enrichment and the merged-`pullRequests` fold above, so degraded rows and
+externally merged PR entries are slimmed alike — that drops the **detail-only** fields.
+Every stripped optional field is simply **absent** on list rows (never `null`; the v4.2
+`diskUsage` precedent), so this is not a wire-shape change; the one non-optional case is
+`diffSummary.files`, which is always serialized and is emptied to `[]` whenever a list row
+carries a `diffSummary` at all (the aggregate enrichment leaves `diffSummary` absent on the
+normal list paths, so today the whole object is absent). `workspace.get` never slims and
+keeps serving every field. The list-only omissions are:
+
+| Omitted on list rows | Detail read | Rationale |
+| --- | --- | --- |
+| `tokenUsage` | `workspace.get`, `workspace.getTokenUsage` + `workspace:tokenUsage-changed` (§5.23) | Persisted tally dominated large frames; no list consumer reads it |
+| `agentSummary` on **archived** rows only | `workspace.get` | No HUD/coverflow agent card renders for an archived workspace; active rows keep the full summary |
+| `setupScript` | `workspace.get`, `workspace.getSetupScript` (§5.25) | Unbounded script body read only by the open workspace's chat/setup surfaces |
+| `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
+| `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
+| `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
+| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
+
+**`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
+lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
+the pre-cap (post-merge) pool length (so a client can render "+N more" and fetch the full pool
+via `workspace.get`, which serves the same merged pool uncapped — every entry the cap dropped is
+recoverable there, whichever source it came from); absent (never `null`) when the pool fit, and
+**never** on `workspace.get`. Derived-field ladder: computed on the list emit path from the row
+already in hand (the length of the pool being truncated — no extra read), never persisted; the
+`workspace.get` merge is two scoped store reads (git roots, non-cancelled monitors — the same
+narrow projection as the list's bulk read), no forge calls.
+
+Fixed-size scalars stay on list rows even when only detail surfaces read them
+(`baseCommitSha`, `path` / `repositoryPath` / `worktreePath`): a 40-hex SHA buys nothing per
+row, and FE stores hydrate the open workspace from list rows. Clients that hydrate a
+workspace from `workspace.get` and later receive a `workspace.list` refresh must preserve the
+detail-only fields across the merge rather than overwrite them with the (absent) list values.
+
+The contract is enforced in intentd by two goldens on a worst-case-realistic active row
+(ten-agent `agentSummary`, an eight-entry stored PR pool capped to five on the row, every
+small optional scalar present):
+a per-row byte budget (`WORKSPACE_LIST_ROW_BUDGET_BYTES` in `intent-core`, with the
+fleet arithmetic in its doc comment) whose failure message attributes bytes per field, and
+a top-level / per-PR key allowlist (`WORKSPACE_LIST_ROW_KEYS` / `WORKSPACE_LIST_PR_KEYS`).
+Adding a field to list rows means adding it to the allowlist, stating which rung of the
+derived-field ladder it sits on, and updating this table.
 
 **Workspace disk usage (`workspace.diskUsage`, on-demand since v4.2).** The **cached**
 whole-workspace disk footprint —
@@ -1767,7 +1907,8 @@ seq-0 snapshot rows (§6.9) **never serve** `tokenUsage` — the field is option
 (`skip_serializing_if`), so it is simply absent (never `null`), following the v4.2
 `diskUsage` precedent. `workspace.get` keeps serving it, and clients that need usage read
 `workspace.getTokenUsage` + `workspace:tokenUsage-changed` as before (the FE already did
-exactly this — no list consumer read the field off list rows).
+exactly this — no list consumer read the field off list rows). The full set of list-only
+omissions is tabulated under **List-row slimming** in the `Workspace` payload notes above.
 
 | Method | Params | Result |
 | --- | --- | --- |
