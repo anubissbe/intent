@@ -141,6 +141,14 @@ authentication is available. The report is read-only, including stale sandbox st
 The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
 (default 10, fractional allowed) and reports `{}` when that budget is exceeded.
 
+The shell suites are linted by `make lint-shell-sleeps` (part of `make check`): a fixed
+`sleep <n>`, `time.sleep(<n>)`, or fixed-count poll loop in `scripts/*.test.sh` must wait
+on an observable event instead, or carry `# timing-guard: <reason>` on its line or the
+line above. `scripts/fixed-sleep-baseline.txt` grandfathers existing sites and only
+ratchets down. The poll-loop rule tokenises line by line; its accepted blind spots
+(multi-line arithmetic containing `<<`, a `case` pattern `done)`) are listed in the
+header of `scripts/lint-fixed-sleeps.sh` and pinned by `scripts/lint-fixed-sleeps.test.sh`.
+
 ### Chat-motion performance traces
 
 `pnpm perf:chat-motion` (in `packages/cloudlands-fe`) records a CDP trace of the chat
