@@ -7,6 +7,8 @@
 #  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
+# Knobs: STATUS_JSON=1 (or --json) emits JSON; DEV_STATUS_PORT_TIMEOUT=<seconds>
+# bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok).
 
 set -euo pipefail
 
@@ -21,6 +23,7 @@ fi
 
 exec python3 - "$repo_root" "$json_output" <<'PY'
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -80,8 +83,34 @@ def doctor_status():
     }
 
 
+# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
+# port block (~0.8 s each on a loaded host, more when explicit ports are set or
+# the preferred block is busy); the former 2 s budget emptied "ports" under
+# load, and 10 s keeps generous headroom for loaded hosts while still bounding
+# the report.
+PORT_TIMEOUT_DEFAULT = 10.0
+
+
+def port_timeout():
+    raw = os.environ.get("DEV_STATUS_PORT_TIMEOUT")
+    if raw is None or not raw.strip():
+        return PORT_TIMEOUT_DEFAULT
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0:
+        print(
+            f"dev-status: ignoring DEV_STATUS_PORT_TIMEOUT={raw!r} "
+            f"(expected a positive number of seconds); using {PORT_TIMEOUT_DEFAULT:g}",
+            file=sys.stderr,
+        )
+        return PORT_TIMEOUT_DEFAULT
+    return value
+
+
 def port_status():
-    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=2)
+    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=port_timeout())
     ports = {}
     if result is None or result.returncode != 0:
         return ports
