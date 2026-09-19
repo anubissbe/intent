@@ -16,12 +16,13 @@ export const RENAMED_BINDINGS = new Map([
   ['ws.agent.spawnPeer', 'ws.agent.create({ topLevel: true })'], // renamed in v8.1
 ]);
 
-const NAME_SRC = 'ws\\.[A-Za-z]+(?:\\.[A-Za-z]+)*';
-const NAME_RE = new RegExp(`\\b${NAME_SRC}`, 'g');
+const IDENT_SRC = '[A-Za-z_$][A-Za-z0-9_$]*';
+// A complete `ws.<segment>(.<segment>)*` name: full JS identifier segments, no partial match of a longer identifier.
+const NAME_SRC = `ws\\.${IDENT_SRC}(?:\\.${IDENT_SRC})*(?![A-Za-z0-9_$])`;
+const NAME_RE = new RegExp(`(?<![A-Za-z0-9_$])${NAME_SRC}`, 'g');
 const HELP_LINE_RE = new RegExp(`^  (${NAME_SRC})\\(`);
 const CODE_SPAN_RE = /`([^`\n]+)`/g;
-const IDENT_RE = /[A-Za-z_$][A-Za-z0-9_$]*/g;
-const STRING_LITERAL_RE = /"[^"]*"|'[^']*'/g;
+const IDENT_RE = new RegExp(IDENT_SRC, 'g');
 const IGNORED_IDENTS = new Set(['null', 'true', 'false', 'undefined', 'string', 'number', 'boolean', 'void']);
 
 export function formatError({ file, line, message }) {
@@ -39,12 +40,42 @@ export function extractHelpText(rustSource) {
   return result;
 }
 
-/** Index of the `)` matching the `(` at `open`, or -1 when unbalanced. */
+/**
+ * Same length as `text`, with the contents of every `"…"` / `'…'` literal (escape-aware; an unterminated literal
+ * runs to the end) blanked to spaces so brackets, commas, colons and identifiers inside literals never count.
+ */
+export function maskLiterals(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const quote = text[i];
+    if (quote !== '"' && quote !== "'") {
+      out += quote;
+      continue;
+    }
+    out += quote;
+    for (i += 1; i < text.length; i += 1) {
+      if (text[i] === '\\' && i + 1 < text.length) {
+        out += '  ';
+        i += 1;
+        continue;
+      }
+      if (text[i] === quote) {
+        out += quote;
+        break;
+      }
+      out += ' ';
+    }
+  }
+  return out;
+}
+
+/** Index of the `)` matching the `(` at `open` (parentheses inside string literals ignored), or -1 when unbalanced. */
 function matchParen(text, open) {
+  const masked = maskLiterals(text);
   let depth = 0;
-  for (let i = open; i < text.length; i += 1) {
-    if (text[i] === '(') depth += 1;
-    else if (text[i] === ')') {
+  for (let i = open; i < masked.length; i += 1) {
+    if (masked[i] === '(') depth += 1;
+    else if (masked[i] === ')') {
       depth -= 1;
       if (depth === 0) return i;
     }
@@ -52,7 +83,7 @@ function matchParen(text, open) {
   return -1;
 }
 
-/** Remove every `: <value>` expression (up to the next same-depth `,` or closing bracket). */
+/** Remove every `: <value>` expression (up to the next same-depth `,` or closing bracket); `text` is literal-masked. */
 function stripValues(text) {
   let out = '';
   for (let i = 0; i < text.length; i += 1) {
@@ -80,7 +111,7 @@ function stripValues(text) {
  * what a prose call such as `ws.x({ options: [{ label: "A" }] })` needs (`label` is example data, not an option).
  */
 export function identifiersIn(text, { dropValues = false } = {}) {
-  const literalFree = text.replace(STRING_LITERAL_RE, '""');
+  const literalFree = maskLiterals(text);
   const clean = dropValues ? stripValues(literalFree) : literalFree;
   const names = [];
   for (const m of clean.matchAll(IDENT_RE)) {
@@ -91,13 +122,14 @@ export function identifiersIn(text, { dropValues = false } = {}) {
   return names;
 }
 
-/** Split an argument list on top-level commas (ignoring commas nested in `{}`, `[]`, `()`). */
+/** Split an argument list on top-level commas (ignoring commas nested in `{}`, `[]`, `()` or string literals). */
 export function splitArgs(text) {
+  const masked = maskLiterals(text);
   const args = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i];
+  for (let i = 0; i < masked.length; i += 1) {
+    const c = masked[i];
     if ('{[('.includes(c)) depth += 1;
     else if ('}])'.includes(c)) depth -= 1;
     else if (c === ',' && depth === 0) {
@@ -205,7 +237,7 @@ export function collectDocMentions(markdown) {
     for (const m of raw.matchAll(NAME_RE)) names.push({ name: m[0], line });
     for (const span of raw.matchAll(CODE_SPAN_RE)) {
       const code = span[1];
-      for (const m of code.matchAll(new RegExp(`${NAME_SRC}\\(`, 'g'))) {
+      for (const m of maskLiterals(code).matchAll(new RegExp(`(?<![A-Za-z0-9_$])${NAME_SRC}\\(`, 'g'))) {
         const open = m.index + m[0].length - 1;
         const close = matchParen(code, open);
         if (close === -1) continue;

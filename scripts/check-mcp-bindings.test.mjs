@@ -13,6 +13,7 @@ import {
   extractHelpText,
   formatError,
   identifiersIn,
+  maskLiterals,
   mergeBindings,
   parseBindings,
   renderIndex,
@@ -148,6 +149,16 @@ test('identifiersIn and splitArgs drop literals, keywords, values after ":" and 
   assert.deepEqual(splitArgs(''), []);
 });
 
+test('maskLiterals blanks literal contents (escape-aware) so brackets, commas and colons inside them are inert', () => {
+  const text = 'a, "x, (y: z)", \'q\\"r)\', "open';
+  const masked = maskLiterals(text);
+  assert.equal(masked.length, text.length);
+  assert.equal(masked, 'a, "         ", \'     \', "    ');
+  assert.equal(maskLiterals('"trailing\\'), '"         ');
+  assert.deepEqual(splitArgs('id, "a, b", { repo: "o/n)", repoo: true }'), ['id', '"a, b"', '{ repo: "o/n)", repoo: true }']);
+  assert.deepEqual(identifiersIn('{ repo: "o/n)", repoo: true, k: "x: [ignored]" }', { dropValues: true }), ['repo', 'repoo', 'k']);
+});
+
 test('mergeBindings unions by name with the first list winning', () => {
   const merged = allBindings();
   assert.equal(merged.filter((b) => b.name === 'ws.agent.create').length, 1);
@@ -186,6 +197,22 @@ test('collectDocMentions returns names and inline-code signatures outside fences
     ['ws.pr.snapshot', '887', 7],
     ['ws.pr.snapshot', 'prNumber, { repo? }', 8],
     ['ws.hook.schedule', '{ name, code, delayMs }', 8],
+  ]);
+});
+
+test('collectDocMentions keeps complete identifiers and is quote-aware inside inline-code calls', () => {
+  const doc = [
+    'Call `ws.agent.list2()` or ws.agent.list_all or `ws.agent.list$x`; not xws.agent.list.',
+    '`ws.pr.snapshot(prNumber, { repo: "team/repo)", repoo: true })` and `ws.pr.snapshot(1, { repo: "team/repo(" })`.',
+    '`ws.agent.send(id, "call ws.fake.inner(1)")`.',
+  ].join('\n');
+  const { names, signatures } = collectDocMentions(doc);
+  assert.deepEqual(names.filter((n) => n.line === 1).map((n) => n.name), ['ws.agent.list2', 'ws.agent.list_all', 'ws.agent.list$x']);
+  assert.deepEqual(signatures.map((s) => [s.name, s.args, s.line]), [
+    ['ws.agent.list2', '', 1],
+    ['ws.pr.snapshot', 'prNumber, { repo: "team/repo)", repoo: true }', 2],
+    ['ws.pr.snapshot', '1, { repo: "team/repo(" }', 2],
+    ['ws.agent.send', 'id, "call ws.fake.inner(1)"', 3],
   ]);
 });
 
@@ -255,6 +282,24 @@ test('a doc mention of a binding absent from the help text fails with file:line,
   ]);
 });
 
+test('an unknown name that extends a known one is rejected in full, not truncated to the known binding', async () => {
+  const doc = `${VALID_DOC}\nSee \`ws.agent.list2()\` and \`ws.agent.list_all\`.\n`;
+  const result = await runChecks(await withIndex({ 'methods/agents.md': doc }));
+  const line = doc.split('\n').length - 1;
+  assert.deepEqual(messages(result), [
+    `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.agent.list2 is not a binding in the pinned intentd help text (${TOOLS_RS_PATH}); if it was renamed, add it to RENAMED_BINDINGS in scripts/check-mcp-bindings.mjs`,
+    `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.agent.list_all is not a binding in the pinned intentd help text (${TOOLS_RS_PATH}); if it was renamed, add it to RENAMED_BINDINGS in scripts/check-mcp-bindings.mjs`,
+  ]);
+});
+
+test('a stale option after a literal containing parentheses is still rejected', async () => {
+  const doc = `${VALID_DOC}\n\`ws.pr.snapshot(prNumber, { repo: "team/repo)", repoo: true })\` and \`ws.pr.snapshot(1, { repo: "team/repo(", repoo: true })\`.\n`;
+  const result = await runChecks(await withIndex({ 'methods/agents.md': doc }));
+  const line = doc.split('\n').length - 1;
+  const expected = `${PROTOCOL_DIR}/methods/agents.md:${line}: error: ws.pr.snapshot: "repoo" is not a parameter or option of ws.pr.snapshot in the help text — signature is ws.pr.snapshot(prNumber, { repo? }?) → { repo, checks: { total, failedNames }, requirements: { state, threads: { unresolved? } } }`;
+  assert.deepEqual(messages(result), [expected, expected]);
+});
+
 test('a renamed binding listed in RENAMED_BINDINGS passes; an unlisted rename fails', async () => {
   assert.deepEqual(messages(await runChecks(await withIndex({ 'methods/agents.md': VALID_DOC }))), []);
   const doc = VALID_DOC.replace('ws.agent.spawnPeer', 'ws.agent.spawnClone');
@@ -281,7 +326,8 @@ test('valid prose signatures pass: literals, partial option lists, opaque option
   const doc = `${VALID_DOC}
 \`ws.agent.create({ topLevel: true, ... })\`, \`ws.agent.send(agentId, message, { priority: "queue", replacePending: true })\`,
 \`ws.workspace.setStatusImage({ data, mimeType })\`, \`ws.workspace.setStatusImage(null)\`, \`ws.agent.list(true)\`,
-\`ws.app.question.ask({ header, question, options: [{ label: "A" }] })\`, \`ws.hook.*\`, \`ws.app.question\`, \`ws.help()\`.
+\`ws.app.question.ask({ header, question, options: [{ label: "A" }] })\`, \`ws.hook.*\`, \`ws.app.question\`, \`ws.help()\`,
+\`ws.pr.snapshot(prNumber, { repo: "team/repo)" })\`, \`ws.pr.snapshot(1, { repo: "a(b, c: d" })\`, \`ws.help("x\\"y(")\`.
 `;
   const result = await runChecks(await withIndex({ 'methods/agents.md': doc }));
   assert.deepEqual(messages(result), []);
