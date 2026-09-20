@@ -2,6 +2,8 @@
 
 ## Protocol Version & Compatibility
 
+Version 10.4 adds 27 `sourceControl.*` router methods for independent instance connections and explicit repository addressing (§5.27), and optional `path`/`username` attributes to the UDS Git credential request. Workspace PR routing resolves from origin; legacy `github.*` remains GitHub-specific. The catalog is 350 router + 53 fast-path + 2 aliases = 405 dispatchable names.
+
 **Version:** `10.4`
 
 Version 10.4 is an **additive** minor bump over 10.3 carrying two independent additions ([intent-hq/intentd#2022](https://github.com/intent-hq/intentd/pull/2022) and [intent-hq/intentd#2026](https://github.com/intent-hq/intentd/pull/2026)).

@@ -479,7 +479,11 @@ explicit non-empty `clonePath`, a URL carrying no `owner/repo` pair, and creates
 provision no checkout (`isRemote: true`, `skipIsolation`/`skipWorktree`, or a
 caller-supplied `worktreePath`).
 
-**Clone orchestration (`workspace.create`).** When `githubUrl` is set,
+**Clone orchestration (`workspace.create`).** The legacy `githubUrl` field
+carries the complete repository URL for either GitHub or
+GitLab, including self-managed hosts and nested namespaces. Private HTTPS clone credentials come from the matching source-control connection; existing Git helpers remain fallbacks. SSH uses the host's normal Git configuration.
+
+When `githubUrl` is set,
 `repositoryPath` is not already a local git repository, and cache hydration above does
 not apply, the daemon clones the URL
 before branch naming and worktree provisioning, reusing the streaming `git.clone`
@@ -2013,4 +2017,3 @@ script's exit code (§5.1).
   "script":"#!/usr/bin/env bash\nset -euo pipefail\ncargo fetch\n",
   "projectType":"rust","updatedAt":1750000000000,"generatedBy":"agent" } } }
 ```
-

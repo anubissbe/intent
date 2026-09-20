@@ -4,7 +4,7 @@
 
 The namespace holds the **two** workspace/active-PR-scoped methods that survived the v5.0 removal: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
 
-> Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
+> Host-agnostic naming. `pr.*` is the canonical wire name. "PR" covers pull request / merge request / change request. GitHub or GitLab backs this surface, resolved from each workspace repository origin and its registered connection (§5.27). See [GitLab setup and supported operations](../../GITLAB.md).
 
 > **Removed in v5.0 ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).** The 11 other `pr.*` methods — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — were left caller-less after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)), and are deleted from the wire (calling one returns `-32601` Method not found — same precedent as the v3.0 `pr.waitForChanges` removal). The v2.1 provider capability gating went with them (no gated `pr.*` operation remains). Equivalent PR read/write operations live on the explicit-addressing `github.*` surface (§5.27 — e.g. `github.pulls.merge`, `github.pulls.updateBranch`, `github.getReviewThreads`, `github.listReviewComments`, `github.replyReviewComment`, `github.resolveThread` / `github.unresolveThread`); agents use `gh` on the host plus the read-only MCP `ws.pr.snapshot` binding (below).
 
@@ -183,4 +183,3 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 // ← response — nothing changed vs. the emit baseline: no wake
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
-

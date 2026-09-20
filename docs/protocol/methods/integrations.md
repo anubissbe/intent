@@ -22,6 +22,51 @@
 
 ### 5.27 `github.*` namespace
 
+> **Repository-scoped providers.** The `github.*` methods below always address GitHub. The provider-neutral `sourceControl.*` surface selects a registered connection explicitly; workspace `pr.*` operations resolve the connection from the repository origin. See [GitLab setup](../../GITLAB.md).
+
+#### `sourceControl.*` connections and explicit addressing
+
+A connection ID is its canonical full instance URL (including nondefault port and installation prefix). `Connection` is `{ id, provider: "github" | "gitlab", instanceUrl, tokenSource, enabled, isConfigured, user: GithubUser | null }`. `isConfigured` means authentication was verified. Secret values are never returned.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sourceControl.connections.list | — | `{ connections: Connection[] }` |
+| sourceControl.connections.configure | `{ provider, instanceUrl, tokenSource?, token? }` | `{ connection: Connection }` |
+| sourceControl.connections.disconnect | `{ connectionId }` | `{ connection: Connection }` |
+| sourceControl.authStatus | `{ connectionId }` | `{ connection: Connection }` |
+| sourceControl.resolve | `{ workspaceId? , repoUrl? }` | `{ connectionId, provider, instanceUrl, repo: { owner, name, htmlUrl } \| null, resource: { kind: "pr" \| "issue", number } \| null }` |
+
+Connection configuration and the explicit browse methods require administrator access. Tokens are saved in distinct host-bound secret records; disconnect disables only the chosen entry. For nested GitLab namespaces, `owner` includes every group segment, such as `team/platform`. Each repo response preserves its canonical `htmlUrl`.
+
+The following neutral methods have the corresponding `github.*` parameter/result shapes below, plus a required addressing context: `connectionId`, `repoUrl`, or `workspaceId`. Conflicting contexts are invalid parameters. Explicit-addressing calls cannot alter a daemon-wide provider.
+
+| Neutral method | Existing payload contract |
+| --- | --- |
+| sourceControl.repos.list | github.repos.list |
+| sourceControl.repos.search | github.repos.search |
+| sourceControl.repos.get | github.repos.get |
+| sourceControl.repoConfig.get | github.repoConfig.get |
+| sourceControl.relatedRepos.list | github.relatedRepos.list |
+| sourceControl.branches.list | github.branches.list |
+| sourceControl.branches.listCached | github.branches.listCached |
+| sourceControl.pulls.create | github.pulls.create |
+| sourceControl.pulls.get | github.pulls.get |
+| sourceControl.pulls.list | github.pulls.list |
+| sourceControl.pulls.search | github.pulls.search |
+| sourceControl.pulls.merge | github.pulls.merge |
+| sourceControl.pulls.updateBranch | github.pulls.updateBranch |
+| sourceControl.issues.get | github.issues.get |
+| sourceControl.issues.list | github.issues.list |
+| sourceControl.issues.search | github.issues.search |
+| sourceControl.getUser | github.getUser |
+| sourceControl.listReviewComments | github.listReviewComments |
+| sourceControl.replyReviewComment | github.replyReviewComment |
+| sourceControl.getReviewThreads | github.getReviewThreads |
+| sourceControl.resolveThread | github.resolveThread |
+| sourceControl.unresolveThread | github.unresolveThread |
+
+Unregistered instances, invalid connection IDs and conflicting contexts return `-32602`. Unsupported GitLab operations return the existing explicit unsupported-operation error instead of silently invoking GitHub. See [GitLab supported operations and limits](../../GITLAB.md).
+
 > The `github.*` namespace is served **daemon-owned** against `api.github.com` — 25 methods (24 network reads/writes plus the cached-first `github.branches.listCached` — one-shot ls-remote fallback on a miss — v6.2), with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
@@ -821,4 +866,3 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 // ← error
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
 ```
-

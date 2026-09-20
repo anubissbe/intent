@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **388 dispatchable method names** across the following categories:
+The API exposes **415 dispatchable method names** across the following categories:
 
-- **Router methods:** 329 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 356 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 57 methods intercepted before the router for performance or per-connection state (one of them, `invite.redeem`, is a pin-transitional entry — see the fast-path section)
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 388 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 415 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 388 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 415 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.48) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (329 total)
+### Router methods by namespace (356 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -54,6 +54,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
+| sourceControl | 27 | authStatus, branches.list, branches.listCached, connections.configure, connections.disconnect, connections.list, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolve, resolveThread, unresolveThread — repository-scoped connections and forge operations (§5.27; v10.4) |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
@@ -77,7 +78,7 @@ The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, 
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `note.presence.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
-**UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
+**UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed forge credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
 **`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
 
@@ -329,9 +330,9 @@ Runs the daemon's legacy workspace import over RPC — the same engine behind th
 
 #### `system.gitCredential` (UDS-only, v2.5)
 
-Resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (monorepo#884): the daemon-spawned children (PTY terminals, agent provider shells) run the helper as a github.com-scoped git credential helper, and the helper fetches the credential from the daemon over UDS on demand — no token bytes in child environments.
+Resolves a registered forge credential for the `intentd git-credential` helper. Terminals and agents receive scoped daemon helpers; no raw token is placed in their environment.
 
-**Request:** `{ pid?: number, protocol?: string, host?: string }` — `pid` is the calling helper's self-reported process id, used only for audit logging; missing or non-numeric values are tolerated (treated as absent), never rejected. `protocol`/`host` are the git-credential attributes the helper forwards so the daemon re-checks the scope gate server-side: the credential is granted only for `protocol=https` + `host=github.com` (case-insensitive, exact host), so an arbitrary local UDS caller cannot obtain the credential for another scope (defense in depth — the helper already applies the same gate before calling).
+**Request:** `{ pid?: number, protocol?: string, host?: string, path?: string, username?: string }`. The pid is audit-only metadata. HTTPS host, port and installation path must match an enabled registered connection. The helper uses `credential.useHttpPath=true` to preserve installation prefixes. If supplied, the username must match the provider credential identity (`x-access-token` for GitHub, `oauth2` for GitLab). All scope checks are repeated server-side.
 
 **Response:**
 
@@ -342,7 +343,7 @@ Resolves the daemon-managed GitHub credential for the `intentd git-credential` h
 { "credential": null }
 ```
 
-- `credential` is `null` when no credential is available — the scope gate missed (`protocol`/`host` absent or not `https`/`github.com`), the `sourceControl.github.exposeGitCredentialToChildren` setting is off, or no token resolves via the `sourceControl.github.tokenSource` chain. The cases are deliberately indistinguishable on the wire.
+- `credential` is `null` for invalid or unregistered scope, a disconnected connection, a disabled child-credential gate, a mismatched username, or no usable token. These cases are indistinguishable on the wire. A connection's `exposeGitCredentialToChildren` controls the grant; GitHub's legacy setting remains supported.
 - **UDS-only:** a remote (TCP/WSS) caller is rejected with `-32001 "system.gitCredential is available over UDS only"` — the credential must never cross the network.
 - Each grant is audit-logged by the daemon (requesting pid only; the token value is never logged).
 
