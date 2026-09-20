@@ -103,7 +103,9 @@ and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for
 ## Commit & PR Workflow
 
 When changes span a submodule and the monorepo, land the submodule PR (Phase 1); the
-monorepo pin advance (Phase 2) then happens automatically.
+monorepo pin advance (Phase 2) then happens automatically. Exception: monorepo protocol
+docs that the consumer checks read (`docs/protocol/`) land first when the change is an
+addition — see Phase 2 → Docs lead the pin.
 
 ### Phase 1 — Submodule PRs
 
@@ -141,11 +143,20 @@ the notify step logs a warning and skips, and the cron backstop still advances t
 
 The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
 whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
-or it carries the `submodule-pin-intended` label, and `check-makefile-targets` (run by
-the `docs-check` job and as part of `make check`) fails a PR whose Makefile references
-an intentd crate or `--test` target absent at the pinned gitlink, so a Makefile change
-that depends on an intentd PR must wait for the auto-bump. For an urgent bump, dispatch
-the workflow instead of filing a PR:
+or it carries the `submodule-pin-intended` label. The consumer checks — `make consumer-checks`
+(method and event catalogs, protocol→FE field parity, docs-check, check-makefile-targets) —
+run against the pins in the monorepo `docs-check` job and, through the reusable
+`.github/workflows/consumer-checks.yml`, as `monorepo-consumer-checks` on every intentd and
+cloudlands-fe PR against that PR's head. Docs lead the pin, by direction: for an
+**addition** the monorepo docs PR its table names lands first (the checks only warn until
+the component catches up), then re-run the upstream job; for a **removal** the component
+PR lands first (the upstream check warns about the now-extra docs entry; a docs-first
+removal is rejected as a component extra) and the docs entry is removed after the bump. A
+**rename** is an addition: document the new name first, keeping the old entry, rename in
+the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
+upstream (`make mcp-bindings-doc` regenerates its index in the monorepo), and a Makefile
+change that depends on an intentd PR still waits for the auto-bump
+(`check-makefile-targets`). For an urgent bump, dispatch the workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml
