@@ -1,7 +1,23 @@
 name: CI
+# CI is tiered by event. pull_request runs every job; merge_group runs the
+# same jobs on the actual merged tree before the queue lands it, except the
+# three PR-metadata checks (pr-title / breaking-token / submodule-pins),
+# which read `github.event.pull_request.*` / `github.head_ref` /
+# `github.base_ref` — none of which exist on merge_group — and already
+# covered the identical diff on the PR run, so they stay pull_request-only.
+# The `gate` job (CI Gate) aggregates every job into the one context the
+# main ruleset requires and is event-aware about those skips.
+#
+# Incident: intent-hq/intent#5433 and #5446 were each green alone but broke
+# shell-tests together on every PR (intent-hq/intent#5455) for ~14 h — the
+# queue landed both without a check run. No `push: branches: [main]` trigger
+# on purpose: every main commit's tree is identical to one a merge-group run
+# just tested.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -9,7 +25,8 @@ permissions:
 
 jobs:
   # pr-title is seconds-long, so it runs directly on a GitHub-hosted
-  # runner — no tinybox routing.
+  # runner — no tinybox routing. pull_request-only: it validates the PR
+  # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -149,6 +166,7 @@ jobs:
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
           bash scripts/bootstrap-dev-host.test.sh
+          bash scripts/ci-gate.test.sh
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
@@ -173,6 +191,7 @@ jobs:
       - run: git submodule update --init --depth=1 packages/intentd
       - run: |
           /bin/bash --version
+          REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
@@ -196,6 +215,8 @@ jobs:
 
   # Guard release footer tokens in PR prose and branch commit messages unless
   # the release impact is explicitly acknowledged with a label.
+  # pull_request-only: reads the PR body, labels and base_ref, none of which
+  # exist on merge_group; the gate accepts its skip there.
   breaking-token:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -220,6 +241,8 @@ jobs:
   # (auto/submodule-bump). Reject gitlink changes in any other PR — a
   # workspace branch that checked out a submodule feature branch can carry
   # one unnoticed — unless the submodule-pin-intended label is applied.
+  # pull_request-only: reads head_ref, base_ref and PR labels, none of which
+  # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -251,3 +274,29 @@ jobs:
         with:
           node-version: 22
       - run: node --test .github/scripts/issue-triage/parse-issue.test.js .github/scripts/issue-triage/needs-info.test.js .github/scripts/issue-triage/agentic-triage.test.js
+
+  # Aggregate gate: the single `CI Gate` context the main ruleset requires
+  # (same pattern as intentd's gate job). always() so a failed or cancelled
+  # need still produces a (failing) result rather than a missing check.
+  # The result matrix lives in scripts/ci-gate.sh (covered by
+  # scripts/ci-gate.test.sh in shell-tests): the always-on jobs must succeed
+  # outright on every event; the pull_request-only jobs must succeed outright
+  # on pull_request and must be job-skipped on merge_group — a skip on
+  # pull_request, a run on merge_group, or any other event is a
+  # misconfiguration and fails. The self-test diffs the script's job list
+  # against this `needs` list, so keep both in step.
+  gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    permissions: {}
+    if: always()
+    needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-tests-bash3, repo-hygiene, breaking-token, submodule-pins, triage-parser-test]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Check results
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash scripts/ci-gate.sh
