@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **415 dispatchable method names** across the following categories:
+The API exposes **419 dispatchable method names** across the following categories:
 
-- **Router methods:** 356 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 57 methods intercepted before the router for performance or per-connection state (one of them, `invite.redeem`, is a pin-transitional entry — see the fast-path section)
+- **Router methods:** 361 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 415 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 419 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 415 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 419 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.48) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (356 total)
+### Router methods by namespace (361 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
-| pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
+| pr | 7 | comment, create, merge, refresh, review, status, updateBranch — repository-scoped writes added in v10.5 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
@@ -54,7 +54,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 27 | authStatus, branches.list, branches.listCached, connections.configure, connections.disconnect, connections.list, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolve, resolveThread, unresolveThread — repository-scoped connections and forge operations (§5.27; v10.4) |
+| sourceControl | 27 | authStatus, branches.list, branches.listCached, connections.configure, connections.disconnect, connections.list, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolve, resolveThread, unresolveThread — repository-scoped connections and forge operations (§5.27; v10.5) |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
@@ -66,11 +66,11 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (57 total)
+### Fast-path methods (56 total)
 
-The following 57 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. `invite.redeem` is listed **only** because the monorepo's intentd pin still predates its removal ([#1969](https://github.com/intent-hq/intentd/pull/1969)); the catalog check treats a docs entry the pinned catalog lacks as a warning but a pinned method the docs lack as an error, so the entry is dropped — and the counts above fall to 56 / 387 — once the pin advances past #1969.
+The following 56 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, invite.redeem, note.presence.update, pairing.getInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
 
 The seven multiplayer methods (presence §5.47, invites §5.48; the two presence methods and `workspace.invite.create` shipped in intentd b518d31 alongside the since-replaced `invite.redeem`) are fast-path because they act on per-connection state or on the unauthenticated endpoint: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5); `workspace.invite.create` (owner-only; requires a linked GitHub identity, optional `pinLogin`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link. The four `invite.*` methods are the **only** methods served on the unauthenticated `/invite` endpoint (§5.48 "Joining by invite"; [intent-hq/intentd#1967](https://github.com/intent-hq/intentd/pull/1967), [#1969](https://github.com/intent-hq/intentd/pull/1969), [#1986](https://github.com/intent-hq/intentd/pull/1986), [#1988](https://github.com/intent-hq/intentd/pull/1988) — they replace the device-flow `invite.redeem` of [#1872](https://github.com/intent-hq/intentd/pull/1872), removed by #1969): `invite.inspect { inviteId, secret }` previews an open link → `{ workspaceId, workspaceTitle, hostname, prettyHostname }`; `invite.challenge { inviteId, secret }` is the same preview plus a single-use 10-minute `nonce` / `nonceExpiresAt` for the **gist identity proof** — the guest publishes the nonce in a secret gist with its own daemon (`github.identityProof.create`) and `invite.prove { inviteId, secret, nonce, gistId, login }` joins once the host has read that gist back; `invite.accept { inviteId, secret, credential }` is the returning guest's join with a per-principal credential this host minted earlier, no GitHub call. `prove` and `accept` answer `{ status: "authorized", token, principalId, login, workspaceId }` with the credential **exactly once**, or the terminal invite error (`proof-invalid` / `proof-expired` / `credential-invalid` / `owner-self-join` / pin mismatch / invite closed / `workspace-full`).
 

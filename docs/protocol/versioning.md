@@ -2,9 +2,9 @@
 
 ## Protocol Version & Compatibility
 
-Version 10.4 adds 27 `sourceControl.*` router methods for independent instance connections and explicit repository addressing (§5.27), and optional `path`/`username` attributes to the UDS Git credential request. Workspace PR routing resolves from origin; legacy `github.*` remains GitHub-specific. The catalog is 350 router + 53 fast-path + 2 aliases = 405 dispatchable names.
+Version 10.5 adds 27 `sourceControl.*` router methods for independent instance connections and explicit repository addressing (§5.27), and optional `path`/`username` attributes to the UDS Git credential request. Workspace PR routing resolves from origin; legacy `github.*` remains GitHub-specific. It also adds five workspace-scoped `pr.*` mutation methods (§5.7) and optional `expectedHeadSha` guards on legacy merge entry points. The catalog is 361 router + 56 fast-path + 2 aliases = 419 dispatchable names.
 
-**Version:** `10.4`
+**Version:** `10.5`
 
 Version 10.4 is an **additive** minor bump over 10.3 carrying two independent additions ([intent-hq/intentd#2022](https://github.com/intent-hq/intentd/pull/2022) and [intent-hq/intentd#2026](https://github.com/intent-hq/intentd/pull/2026)).
 
@@ -96,8 +96,8 @@ Also within 10.3 (additive; the intentd multiplayer stack — principals and cal
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.4", server: { protocolVersion: "10.4", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.4", ... }`
+- `client.hello` response: `{ protocolVersion: "10.5", server: { protocolVersion: "10.5", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.5", ... }`
 
 ### Compatibility Policy
 
@@ -105,3 +105,12 @@ The protocol version is advertised in two places:
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
+
+### v10.5 — repository-scoped forge workflows
+
+Adds the 27 `sourceControl.*` connection/browse methods and five workspace write
+methods (`pr.create`, `pr.comment`, `pr.review`, `pr.updateBranch`, `pr.merge`).
+Adds optional `expectedHeadSha` to existing merge methods; the new `pr.merge`
+requires it. Legacy `github.*` remains GitHub-only. All new writes are owner-only.
+Catalog: 361 router methods, 56 fast-path methods, two aliases (419 total).
+Harness 2.7 adds forge-aware agent guidance without changing historical sessions.

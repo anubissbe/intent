@@ -55,7 +55,19 @@ Project, issue and MR links retain the original host and nested namespace. GitLa
 
 GitLab snapshots include project pipeline/discussion policies, effective required approvals, the MR's head pipeline, job statuses and `allow_failure`. Optional jobs do not become required checks. Unavailable requirement data stays unknown; it is not reported as success. The composed REST observation reuses fetched payloads and bounded pagination; it does not claim GitHub GraphQL's single-roundtrip behavior.
 
-Unsupported operations still return explicit errors: rebase merge selection, branch-update emulation, request-changes reviews, multi-project searches, and submitting an approval with a comment atomically. Merging sends the freshly read head SHA; the shared merge contract does not carry a SHA from the user's earlier review. Merge trains are not implemented by this connector.
+GitLab's merge train status maps to `isInMergeQueue`: active/running cars are queued, completed cars are not. Unavailable or unknown server states remain unknown. Request-changes uses the native GraphQL mutation; the checklist treats an outstanding request as blocking, even if numeric approvals are satisfied. These operations remain subject to GitLab's version, tier and project permissions.
+
+Branch updates call the official rebase endpoint and poll its explicit completion state for up to 20 seconds. Enqueued, missing status, failure and timeout never report success. Rebase merge is available for projects whose merge method is fast-forward; Intent never changes project policy. If rebasing changes the head, the result is `merged: false` with the new SHA and a request to review it before merging. `expectedHeadSha` is accepted by `sourceControl.pulls.merge`, `github.pulls.merge` and `accept-changes.mergePR`; providers send it to the merge API as a compare-and-swap guard. It is required by the new agent/workspace `pr.merge` method. Existing clients that omit it retain the legacy contract.
+
+Approve and request-changes reviews accept summary text. GitLab applies the verdict and posts the summary in separate calls. If only the verdict succeeds, the error explicitly identifies that partial success and asks the caller to inspect the MR before retrying the comment. This is not an atomic transaction.
+
+## Search and agent workflows
+
+`pulls.search` and `issues.search` support multiple projects and `created`, `assigned` and `involves` filters; MRs additionally support `review-requested`. Involvement includes GitLab's participant list (including commenters), authors, assignees and MR reviewers. Pagination traverses the requested project order, retaining each project's native ordering. Cursors are bound to the instance, project set, query, page size and authenticated username. An empty filtered page with a next token means continue; an API failure is never treated as an empty result. Cached branch reads use the same full remote identity as clone caching.
+
+Harness 2.7 teaches agents to use `ws.pr.create`, `comment`, `review`, `updateBranch` and `merge` with daemon-held credentials; the corresponding `pr.*` RPCs share the same service authorization and repository resolver. Existing harness versions are preserved. CLI-only work uses `gh` on GitHub and `glab` on the selected GitLab host. A PAT saved in Intent does not implicitly authenticate the separate CLI.
+
+Context mentions, commit links and suggestion-panel links preserve the repository's forge. GitLab identities render a supplied avatar URL or initials; they never probe GitHub for a photo.
 
 ## Wire configuration
 
