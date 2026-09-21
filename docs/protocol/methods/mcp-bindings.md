@@ -206,15 +206,10 @@ ws.note.updateMetadata(id, { title?, tags? }) → { ... }
 ### ws.pr
 
 ```text
-ws.pr.comment(prNumber, body, { repo?, anchor? }?) → { comment }
-ws.pr.create({ title, body?, sourceBranch, targetBranch, draft?, repo? }) → { pullRequest }
-ws.pr.merge(prNumber, { expectedHeadSha, mergeMethod?, repo? }) → { merged, message, sha }
 ws.pr.monitor(prNumber, { repo? }) → { ok, monitor, requirements }
 ws.pr.monitors() → [monitors]
-ws.pr.review(prNumber, verdict, body?, { repo? }?) → { review }
 ws.pr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
 ws.pr.unmonitor(prNumber, { repo? }) → { ok, monitor }
-ws.pr.updateBranch(prNumber, { repo? }?) → { updated }
 ```
 
 ### ws.primitive

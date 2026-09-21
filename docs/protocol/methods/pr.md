@@ -212,3 +212,5 @@ interpret such a response as a rollback or blindly repeat the entire operation.
 Merge train snapshots expose `isInMergeQueue` for known active or completed states;
 unknown or inaccessible states stay omitted. Intent does not invent queue-removal
 reasons that GitLab did not report. See [GitLab behavior](../../GITLAB.md).
+
+The generated [MCP bindings index](./mcp-bindings.md) tracks the pinned daemon exactly. Regenerate it with `make mcp-bindings-doc` after the daemon pin includes v10.5; the native write contracts above intentionally lead that pin.
