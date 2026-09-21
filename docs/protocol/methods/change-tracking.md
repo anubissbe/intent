@@ -12,7 +12,7 @@ attribution** from `file-tracking` (§5.19) on each step. Every method requires 
 | accept-changes.getStatus | workspaceId (req) | WorkspaceGitStatus (schema below) |
 | accept-changes.prepare | workspaceId (req), action (req), files?: string[] | PrepareResult { valid, warnings[], errors[], suggestedCommitMessage?, suggestedPRTitle?, suggestedPRBody?, filesCount, additions, deletions, files: [{ path, additions, deletions, staged }] } |
 | accept-changes.execute | workspaceId (req), action (req), files?, commitMessage?, prTitle?, prBody?, targetBranch?, mergeStrategy?: "merge"\|"squash"\|"rebase", upToCommitHash?, undoCommitsMetadata?, options?: { stageUnstaged?, pushAfterCommit?, createPRAfterPush?, rebaseFirst?, localOnly? } | AcceptChangesResult { success, steps: [{ id, name, status, message?, error? }], result?: { commitHash?, prNumber?, prUrl?, mergeCommitHash?, … }, error? } |
-| accept-changes.mergePR | workspaceId (req), prNumber (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | AcceptChangesResult |
+| accept-changes.mergePR | workspaceId (req), prNumber (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage?, expectedHeadSha? | AcceptChangesResult |
 | accept-changes.addRemote | workspaceId (req), remoteUrl (req) | WorkspaceGitStatus (refreshed after adding `origin`) |
 
 `action` is one of `commit \| push \| create-pr \| merge \| export \| undo-push \| undo-commit \|
@@ -141,3 +141,5 @@ Metrics are durable (the `workspace_metrics` / `agent_metrics` tables).
   "byAgent":{ "agent-123":{ "additions":140,"deletions":12,"filesChanged":3 } } } }
 ```
 
+
+`expectedHeadSha` on merge requests identifies the commit reviewed by the caller. When provided, GitHub and GitLab reject a changed MR/PR head. Legacy clients may omit it; new callers should always send it. GitLab rebase uses the project’s fast-forward policy and returns `merged: false` when rebasing changes the head, requiring a new review and merge request. See [provider-neutral PR methods](./pr.md).

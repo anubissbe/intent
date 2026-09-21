@@ -2,11 +2,11 @@
 
 ### 5.7 `pr.*`
 
-The namespace holds the **two** workspace/active-PR-scoped methods that survived the v5.0 removal: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
+The namespace holds two workspace/active-PR read methods plus five repository-scoped write methods added in v10.5 (documented below). The read methods are: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
 
-> Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
+> Host-agnostic naming. `pr.*` is the canonical wire name. "PR" covers pull request / merge request / change request. GitHub or GitLab backs this surface, resolved from each workspace repository origin and its registered connection (§5.27). See [GitLab setup and supported operations](../../GITLAB.md).
 
-> **Removed in v5.0 ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).** The 11 other `pr.*` methods — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — were left caller-less after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)), and are deleted from the wire (calling one returns `-32601` Method not found — same precedent as the v3.0 `pr.waitForChanges` removal). The v2.1 provider capability gating went with them (no gated `pr.*` operation remains). Equivalent PR read/write operations live on the explicit-addressing `github.*` surface (§5.27 — e.g. `github.pulls.merge`, `github.pulls.updateBranch`, `github.getReviewThreads`, `github.listReviewComments`, `github.replyReviewComment`, `github.resolveThread` / `github.unresolveThread`); agents use `gh` on the host plus the read-only MCP `ws.pr.snapshot` binding (below).
+> **Historical compatibility.** v5.0 removed the old caller-less PR write and review methods ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921)). v10.5 restores the names `pr.merge` and `pr.updateBranch` with explicit workspace scope and adds `pr.create`, `pr.comment`, and `pr.review` (contracts below). Other removed names still return `-32601`. Existing explicit-addressing `github.*` methods remain GitHub-specific; `sourceControl.*` serves registered connections. Agents use the native write bindings below; `gh` or `glab` is reserved for CLI-only actions.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -53,9 +53,9 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > [intentd#887](https://github.com/intent-hq/intentd/pull/887); repo override + echo
 > [intentd#911](https://github.com/intent-hq/intentd/pull/911))*.** Since
 > [intentd#918](https://github.com/intent-hq/intentd/pull/918) the snapshot is the
-> read-only one-shot `ws.pr.*` MCP binding: agent GitHub workflows are **`gh`-CLI-based**
-> (PR creation, status/checks, reviews, comments, thread resolution, branch updates, and
-> merging all go through `gh` on the host). Since v6.1 the `ws.pr.*` family also carries
+> one-shot read binding. Since v10.5, the native write bindings below support both
+> GitHub and GitLab with repository-scoped credentials. Use `gh` or `glab` only
+> for CLI-only operations on the matching host. Since v6.1 the `ws.pr.*` family also carries
 > the monitoring bindings `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` (§5.42)
 > — for PR *watching* agents prefer `ws.pr.monitor` (daemon-run polling, no TTL);
 > the snapshot survives as the current-state-once read and remains usable from
@@ -184,3 +184,33 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
 
+### Native PR/MR writes (v10.5)
+
+These owner-only operations resolve the forge from `workspaceId` and its origin.
+The optional `repo` is a nested `group/subgroup/project` slug on the same instance;
+URLs, alternate hosts and a global provider switch cannot override that identity.
+The `ws.pr.*` agent bindings use the runtime workspace ID and the same service.
+
+| Method | Parameters beyond required `workspaceId` | Result |
+| --- | --- | --- |
+| `pr.create` | `title`, `sourceBranch`, `targetBranch`; optional `body`, `draft`, `repo` | `{ pullRequest }` (normalized forge record including `number`, `url`, `headSha`) |
+| `pr.comment` | positive `prNumber`, nonblank `body`; optional `anchor`, `repo` | `{ comment }` |
+| `pr.review` | positive `prNumber`, `verdict` (`approve`, `request-changes`, `comment`); optional `body`, `repo` | `{ review }` |
+| `pr.updateBranch` | positive `prNumber`; optional `repo` | `{ updated: true }` only after completion |
+| `pr.merge` | positive `prNumber`, nonblank `expectedHeadSha`; optional `mergeMethod`, `repo` | `{ merged, message, sha }` |
+
+Invalid input returns `-32602`; permission/membership checks run before forge writes.
+Provider errors retain the source-control error categories. A stale head returns a
+conflict without a merge. GitLab branch updates rebase rather than create a merge
+commit. Rebase merge requires fast-forward project policy; a changed rebased head
+returns `merged: false` and requires a fresh review. Request-changes uses GitLab's
+GraphQL mutation and can be rejected by server version, tier or permissions.
+Review verdicts plus summary comments are separate GitLab writes: a partial failure
+says that the verdict succeeded and the comment could not be confirmed. Never
+interpret such a response as a rollback or blindly repeat the entire operation.
+
+Merge train snapshots expose `isInMergeQueue` for known active or completed states;
+unknown or inaccessible states stay omitted. Intent does not invent queue-removal
+reasons that GitLab did not report. See [GitLab behavior](../../GITLAB.md).
+
+The generated [MCP bindings index](./mcp-bindings.md) tracks the pinned daemon exactly. Regenerate it with `make mcp-bindings-doc` after the daemon pin includes v10.5; the native write contracts above intentionally lead that pin.

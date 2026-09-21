@@ -22,6 +22,51 @@
 
 ### 5.27 `github.*` namespace
 
+> **Repository-scoped providers.** The `github.*` methods below always address GitHub. The provider-neutral `sourceControl.*` surface selects a registered connection explicitly; workspace `pr.*` operations resolve the connection from the repository origin. See [GitLab setup](../../GITLAB.md).
+
+#### `sourceControl.*` connections and explicit addressing
+
+A connection ID is its canonical full instance URL (including nondefault port and installation prefix). `Connection` is `{ id, provider: "github" | "gitlab", instanceUrl, tokenSource, enabled, isConfigured, user: GithubUser | null }`. `isConfigured` means authentication was verified. Secret values are never returned.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sourceControl.connections.list | — | `{ connections: Connection[] }` |
+| sourceControl.connections.configure | `{ provider, instanceUrl, tokenSource?, token? }` | `{ connection: Connection }` |
+| sourceControl.connections.disconnect | `{ connectionId }` | `{ connection: Connection }` |
+| sourceControl.authStatus | `{ connectionId }` | `{ connection: Connection }` |
+| sourceControl.resolve | `{ workspaceId? , repoUrl? }` | `{ connectionId, provider, instanceUrl, repo: { owner, name, htmlUrl } \| null, resource: { kind: "pr" \| "issue", number } \| null }` |
+
+Connection configuration and the explicit browse methods require administrator access. Tokens are saved in distinct host-bound secret records; disconnect disables only the chosen entry. For nested GitLab namespaces, `owner` includes every group segment, such as `team/platform`. Each repo response preserves its canonical `htmlUrl`.
+
+The following neutral methods have the corresponding `github.*` parameter/result shapes below, plus a required addressing context: `connectionId`, `repoUrl`, or `workspaceId`. Conflicting contexts are invalid parameters. Explicit-addressing calls cannot alter a daemon-wide provider.
+
+| Neutral method | Existing payload contract |
+| --- | --- |
+| sourceControl.repos.list | github.repos.list |
+| sourceControl.repos.search | github.repos.search |
+| sourceControl.repos.get | github.repos.get |
+| sourceControl.repoConfig.get | github.repoConfig.get |
+| sourceControl.relatedRepos.list | github.relatedRepos.list |
+| sourceControl.branches.list | github.branches.list |
+| sourceControl.branches.listCached | github.branches.listCached |
+| sourceControl.pulls.create | github.pulls.create |
+| sourceControl.pulls.get | github.pulls.get |
+| sourceControl.pulls.list | github.pulls.list |
+| sourceControl.pulls.search | github.pulls.search |
+| sourceControl.pulls.merge | github.pulls.merge |
+| sourceControl.pulls.updateBranch | github.pulls.updateBranch |
+| sourceControl.issues.get | github.issues.get |
+| sourceControl.issues.list | github.issues.list |
+| sourceControl.issues.search | github.issues.search |
+| sourceControl.getUser | github.getUser |
+| sourceControl.listReviewComments | github.listReviewComments |
+| sourceControl.replyReviewComment | github.replyReviewComment |
+| sourceControl.getReviewThreads | github.getReviewThreads |
+| sourceControl.resolveThread | github.resolveThread |
+| sourceControl.unresolveThread | github.unresolveThread |
+
+Unregistered instances, invalid connection IDs and conflicting contexts return `-32602`. Unsupported GitLab operations return the existing explicit unsupported-operation error instead of silently invoking GitHub. See [GitLab supported operations and limits](../../GITLAB.md).
+
 > The `github.*` namespace is served **daemon-owned** against `api.github.com` — 25 methods (24 network reads/writes plus the cached-first `github.branches.listCached` — one-shot ls-remote fallback on a miss — v6.2), with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
@@ -114,7 +159,7 @@ FE's "bypass the buggy backend" behavior for same-repo branches.
 | github.pulls.get | owner (req), repo (req), number (req) | { pull: GithubPullRequest \| null } — `GET /repos/{owner}/{repo}/pulls/{number}`. **Side effect (behavior only, no wire-shape change; [intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923))**: a successful fetch is also folded into the daemon-owned PR state of every **non-archived, non-remote** workspace, and every secondary git root belonging to such a workspace (§5.1 / §5.6), that already references the PR **by URL** — the linked `prUrl` or a `pullRequests` pool entry (archived and remote workspaces, and their roots, are never touched). The two write sets differ: a referencing **workspace** gets its `pullRequests` pool entry upserted (added when absent — a workspace referencing the PR only through its linked `prUrl` gains the entry) and, when the PR is the linked one, its `prStatus` / `prUrl` / `activePullRequest` scalars updated; a referencing **git root** only updates a pool entry that **already exists** (no entry is created when absent) and, when the PR is the linked one, its `prStatus` / `prUrl` (roots carry no `activePullRequest`). Either way a hover-card read after a merge refreshes the sidebar without waiting for the next background sweep. Persisted deltas emit the ordinary `pr:updated` (workspace) / `gitRoot:updated` (git root) plus a `workspace:displayStatus-changed` recompute (§6.5); nothing changed means nothing persisted and nothing emitted. The fold is **passive** — no relink discovery, no stale-unlink, no PR-monitor baseline write, no extra forge call (the one fetch serves both the response and the fold) — and **fail-soft**: a fold failure is logged and never fails the RPC, which still answers `{ pull }` |
 | github.pulls.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", head?, base?, sort?: "created"\|"updated"\|"popularity"\|"long-running", direction?: "asc"\|"desc", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /repos/{owner}/{repo}/pulls` |
 | github.pulls.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"review-requested"\|"involves", state?: "open"\|"closed", query?, repos?: { owner, repo }[], limit?, nextToken? | { pulls: (GithubPullRequest & { owner, repo })[], nextToken? } — `GET /search/issues?q=is:pr repo:{o}/{r} is:{state} {author\|assignee\|review-requested\|involves}:@me {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter:"all"`+`state:"open"` with no `query` delegates to `github.pulls.list`. **`repos` (v10.1, multi-repo search)**: optional extra repositories to search alongside the addressed one, each entry an object whose `owner` and `repo` are GitHub slugs — owner `[A-Za-z0-9-]` (≤ 39 chars), repo `[A-Za-z0-9._-]` (≤ 100 chars, not `.` / `..`), the same rule enforced on the addressed `owner` / `repo` so no value can smuggle extra qualifiers into `q` (any other shape → `-32602` naming the offending `repos[{i}].owner` / `.repo`); entries naming the addressed repo and repeats are dropped (case-insensitive repo identity, first occurrence wins, order kept), and the whole search may span **at most 6** repositories — addressed + extras — else `-32602`, engine untouched. A non-empty `repos` always routes through the search API as ONE request whose `q` carries one `repo:` qualifier per repository (`repo:{o}/{r} repo:{o2}/{r2} …`, no per-repo fan-out) with `sort=updated`, so the page is a single updated-desc blend across repos, and every item's `owner` / `repo` names ITS OWN hit's repository (derived from the hit's `html_url` and echoed with the caller's casing for a scoped repo) rather than the request params. A multi-repo scope naming a repo the token cannot read (GitHub rejects the whole search with 422 "… cannot be searched …"; other 422s surface as-is) is tolerated: each scoped repo is probed once (`GET /repos/{o}/{r}`), the not-found/forbidden ones are dropped, and the search is retried once over the readable remainder — a scope with nothing droppable surfaces the original `-32603`. **Quota**: a non-empty `repos` always routes through `GET /search/issues` — including the blank-query listing the single-repo path serves from `/pulls` — which draws on GitHub's search-API limit (30 requests/min per token) rather than the 5000/h REST budget, so clients should debounce and cache multi-repo calls. Absent/empty `repos` keeps the pre-10.1 single-repo routing unchanged; the only shape change is that every item now carries the additive `owner` / `repo` keys (echoing the addressed repo on the single-repo path) |
-| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
+| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage?, expectedHeadSha? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
 | github.pulls.updateBranch | owner (req), repo (req), number (req), expectedHeadSha? | { message, url? } — `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
 
 #### Issues
@@ -822,3 +867,4 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
 ```
 
+`expectedHeadSha` on merge requests identifies the commit reviewed by the caller. When provided, GitHub and GitLab reject a changed MR/PR head. Legacy clients may omit it; new callers should always send it. GitLab rebase uses the project’s fast-forward policy and returns `merged: false` when rebasing changes the head, requiring a new review and merge request. See [provider-neutral PR methods](./pr.md).
